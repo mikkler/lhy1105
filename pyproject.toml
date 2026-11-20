@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lhy1105"
+version = "0.1.0"
+description = "Safe dual-arm STS3215 to YAM teleoperation"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pyserial"]
+
+[project.scripts]
+lhy1105 = "lhy1105.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]

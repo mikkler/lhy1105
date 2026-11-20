@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "/home/noematrix/miniconda3/envs/lhy/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "python-envs.defaultEnvManager": "ms-python.python:conda",
+  "python-envs.defaultPackageManager": "ms-python.python:conda"
+}
