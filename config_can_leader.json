@@ -1,0 +1,31 @@
+{
+  "serial_port": "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5C84288991-if00",
+  "baudrate": 1000000,
+  "mapping_confirmed": false,
+  "arms": {
+    "left": {
+      "leader_ids": [1, 2, 3, 4, 5, 6, 7],
+      "follower_can": "can_leader_l",
+      "follower_gripper": "none",
+      "joint_sources": [1, 2, 3, 4, 5, 6],
+      "joint_signs": [-1, -1, 1, 1, 1, 1],
+      "gripper_sign": 1,
+      "gripper_span_ticks": 700
+    },
+    "right": {
+      "leader_ids": [8, 9, 10, 11, 12, 13, 14],
+      "follower_can": "can_leader_r",
+      "follower_gripper": "none",
+      "joint_sources": [8, 9, 10, 11, 12, 13],
+      "joint_signs": [-1, -1, 1, 1, 1, 1],
+      "gripper_sign": 1,
+      "gripper_span_ticks": 700
+    }
+  },
+  "safety": {
+    "hz":200,
+    "max_feedback_age_s": 0.2,
+    "joint_limit_margin_rad": 0.0,
+    "max_velocity": [2.0,2.0,2.0,2.0,2.0,2.0,2.0]
+  }
+}

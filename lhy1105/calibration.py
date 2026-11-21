@@ -62,13 +62,16 @@ def fresh_state(robot, dofs: int, max_age: float) -> np.ndarray:
 
 
 def run(bus: FeetechBus, cfg: Config, leader_id: int, *, sign: int | None = None,
-        duration: float | None = None, output: str | None = None) -> Path:
+        duration: float | None = None, output: str | None = None,
+        quiet: bool = False, mapped_pair: bool = False) -> Path:
     """Follow only the corresponding joint and save the paired samples as CSV."""
     from i2rt.robots.get_robot import get_yam_robot
     from i2rt.robots.utils import ArmType, GripperType
     from .cli import key_now, keyboard
 
     side, joint = selection(leader_id)
+    if joint == 6 and not cfg.follower_has_gripper[side]:
+        raise ValueError(f"{side}: selected leader gripper has no follower gripper")
     if sign is None:
         sign = int(cfg.mappings[side].gripper_sign if joint == 6 else cfg.mappings[side].joint_signs[joint])
     if sign not in (-1, 1) or (duration is not None and duration <= 0):
@@ -147,12 +150,17 @@ def run(bus: FeetechBus, cfg: Config, leader_id: int, *, sign: int | None = None
         cumulative_ticks = 0
         last = time.monotonic()
         started = last
+        last_flush = last
         count = 0
         with path.open("w", newline="") as file, keyboard():
             writer = csv.writer(file)
-            writer.writerow(["elapsed_s", "leader_id", "follower_side", "follower_joint",
-                             "leader_tick", "leader_delta_ticks", "leader_delta_rad", "raw_target",
-                             "limited_target", "command", "measured", "limit_hit", "other_joint_max_drift"])
+            if mapped_pair:
+                writer.writerow(["elapsed_s", "mapped_target_rad", "measured", "configured_hz"])
+            else:
+                writer.writerow(["elapsed_s", "leader_id", "follower_side", "follower_joint",
+                                 "leader_tick", "leader_delta_ticks", "leader_delta_rad", "raw_target",
+                                 "limited_target", "command", "measured", "limit_hit",
+                                 "other_joint_max_drift", "configured_hz"])
             try:
                 while duration is None or time.monotonic() - started < duration:
                     cycle = time.monotonic()
@@ -180,10 +188,17 @@ def run(bus: FeetechBus, cfg: Config, leader_id: int, *, sign: int | None = None
                     command = rate_limit(desired, previous, cfg.max_velocity[:dofs] if not is_gripper
                                          else cfg.max_velocity[6:7], dt)
                     robot.command_joint_pos(command)
-                    writer.writerow([f"{now-started:.3f}", leader_id, side, joint + 1, tick,
-                                     cumulative_ticks, f"{delta_rad:.5f}", f"{raw_target:.5f}",
-                                     f"{target:.5f}", f"{command[axis]:.5f}", f"{measured[axis]:.5f}",
-                                     int(limit_hit), f"{other_drift:.5f}"])
+                    if mapped_pair:
+                        writer.writerow([f"{now-started:.6f}", f"{raw_target:.5f}",
+                                         f"{measured[axis]:.5f}", f"{cfg.hz:.3f}"])
+                    else:
+                        writer.writerow([f"{now-started:.6f}", leader_id, side, joint + 1, tick,
+                                         cumulative_ticks, f"{delta_rad:.5f}", f"{raw_target:.5f}",
+                                         f"{target:.5f}", f"{command[axis]:.5f}", f"{measured[axis]:.5f}",
+                                         int(limit_hit), f"{other_drift:.5f}", f"{cfg.hz:.3f}"])
+                    if now - last_flush >= .1:
+                        file.flush()
+                        last_flush = now
                     count += 1
                     minimum[0] = min(minimum[0], tick)
                     maximum[0] = max(maximum[0], tick)
@@ -192,10 +207,11 @@ def run(bus: FeetechBus, cfg: Config, leader_id: int, *, sign: int | None = None
                     minimum[1] = min(minimum[1], measured[axis])
                     maximum[1] = max(maximum[1], measured[axis])
                     unit = "norm" if is_gripper else "rad"
-                    print(f"\rID {leader_id}: leader={tick:4d} tick, Δ={delta_rad:+.3f} rad | "
-                          f"follower={measured[axis]:+.3f} {unit}, command={command[axis]:+.3f}, "
-                          f"target={target:+.3f}{' LIMIT' if limit_hit else ''}\x1b[K",
-                          end="", flush=True)
+                    if not quiet:
+                        print(f"\rID {leader_id}: leader={tick:4d} tick, Δ={delta_rad:+.3f} rad | "
+                              f"follower={measured[axis]:+.3f} {unit}, command={command[axis]:+.3f}, "
+                              f"target={target:+.3f}{' LIMIT' if limit_hit else ''}\x1b[K",
+                              end="", flush=True)
                     previous, previous_tick, last = command, tick, now
                     time.sleep(max(0., 1 / cfg.hz - (time.monotonic() - cycle)))
             except KeyboardInterrupt:

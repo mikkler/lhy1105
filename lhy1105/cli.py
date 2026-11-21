@@ -37,8 +37,8 @@ def key_now() -> str:
     return ""
 
 
-def verify_leaders(bus: FeetechBus, cfg: Config) -> None:
-    for ident in cfg.ids:
+def verify_leaders(bus: FeetechBus, cfg: Config, ids: tuple[int, ...] | None = None) -> None:
+    for ident in cfg.ids if ids is None else ids:
         bus.ping(ident)
         model = bus.model(ident)
         if model != 777:
@@ -124,42 +124,52 @@ def move_to_rest(robots: dict, cfg: Config) -> None:
     print("Both followers reached the rest command and feedback is within tolerance.")
 
 
-def teleop(bus: FeetechBus, cfg: Config, live: bool, duration: float | None) -> None:
-    if live and not cfg.mapping_confirmed:
+def teleop(bus: FeetechBus, cfg: Config, live: bool, duration: float | None,
+           trial: bool = False, output: str | None = None) -> None:
+    if trial and (not live or any(cfg.follower_has_gripper.values())):
+        raise SafetyStop("--trial requires --live with two gripperless followers")
+    if live and not cfg.mapping_confirmed and not trial:
         raise SafetyStop("set mapping_confirmed=true after checking directions and joint order in config.json")
     if live and not sys.stdin.isatty():
         raise SafetyStop("live mode requires an interactive terminal")
     if live:
         from .multi_calibration import run as multi_calibrate
 
-        multi_calibrate(bus, cfg, list(cfg.ids), duration=duration, lock_others=True,
-                        show_cycle_timing=True, limit_velocity=False)
+        options = {"duration": duration, "lock_others": True, "show_cycle_timing": True,
+                   "limit_velocity": not all(cfg.follower_has_gripper.values())}
+        if output is not None:
+            options["output"] = output
+        multi_calibrate(bus, cfg, list(cfg.control_ids), **options)
         return
+    if output is not None:
+        raise ValueError("--output requires --live")
 
-    initial = bus.sample(cfg.ids).positions
-    previous = {side: np.zeros(7) for side in ("left", "right")}
-    cumulative = {ident: 0 for ident in cfg.ids}
+    initial = bus.sample(cfg.control_ids).positions
+    previous = {side: np.zeros(7 if cfg.follower_has_gripper[side] else 6)
+                for side in ("left", "right")}
+    cumulative = {ident: 0 for ident in cfg.control_ids}
     prior_ticks = initial
     last_tick = started = time.monotonic()
     print("Dry run: printing target offsets; no follower command will be sent.")
     while duration is None or time.monotonic() - started < duration:
         cycle_start = time.monotonic()
-        sample = bus.sample(cfg.ids)
+        sample = bus.sample(cfg.control_ids)
         dt = sample.completed_at - last_tick
         if dt <= 0 or dt > 0.25:
             raise SafetyStop("control loop stalled")
         if sample.completed_at - cycle_start > 0.2:
             raise SafetyStop("leader sample too slow")
-        for ident in cfg.ids:
+        for ident in cfg.control_ids:
             cumulative[ident] += tick_delta(sample.positions[ident], prior_ticks[ident])
         commands = {}
         for side in ("left", "right"):
             mapping = cfg.mappings[side]
-            target = np.zeros(7)
+            target = np.zeros(7 if cfg.follower_has_gripper[side] else 6)
             for joint, source in enumerate(mapping.joint_sources):
                 target[joint] = cumulative[source] * (2 * np.pi / 4096) * mapping.joint_signs[joint]
-            target[6] = cumulative[mapping.ids[6]] * mapping.gripper_sign / mapping.gripper_span_ticks
-            commands[side] = rate_limit(target, previous[side], cfg.max_velocity, dt)
+            if cfg.follower_has_gripper[side]:
+                target[6] = cumulative[mapping.ids[6]] * mapping.gripper_sign / mapping.gripper_span_ticks
+            commands[side] = rate_limit(target, previous[side], cfg.max_velocity[:len(target)], dt)
         if int((sample.completed_at - started) * 2) != int((last_tick - started) * 2):
             print(" ".join(f"{side}={np.round(commands[side], 3)}"
                            for side in ("left", "right")))
@@ -177,12 +187,17 @@ def main() -> None:
     sub.add_parser("monitor", help="read-only live position print")
     run = sub.add_parser("teleop", help="dry run unless --live is given")
     run.add_argument("--live", action="store_true", help="enable follower control after prompts")
+    run.add_argument("--trial", action="store_true", help="try unconfirmed six-joint mapping with --live")
     run.add_argument("--duration", type=float, help="stop after this many seconds")
+    run.add_argument("--output", help="CSV recording path for --live")
     cal = sub.add_parser("calibrate", help="follow and record one matching leader/follower joint")
     cal.add_argument("--id", type=int, required=True, dest="leader_id", help="leader servo ID 1..14")
     cal.add_argument("--sign", type=int, choices=(-1, 1), help="follower direction (default: config.json)")
     cal.add_argument("--duration", type=float, help="optional maximum recording time in seconds")
     cal.add_argument("--output", help="CSV recording path")
+    cal.add_argument("--quiet", action="store_true", help="skip per-sample terminal output")
+    cal.add_argument("--mapped-pair", action="store_true",
+                     help="record only mapped leader target, follower feedback and sample timing")
     multi = sub.add_parser("multi", help="follow and record several matching leader/follower joints")
     multi.add_argument("--ids", type=int, nargs="+", required=True, help="selected leader IDs, e.g. --ids 1 2 8 9")
     multi.add_argument("--reverse", type=int, nargs="*", default=[], help="selected IDs whose direction to reverse")
@@ -193,8 +208,10 @@ def main() -> None:
     try:
         cfg = load_config(args.config)
         with FeetechBus(cfg.port, cfg.baudrate) as bus:
-            verify_leaders(bus, cfg)
-            print("14 leader servos online; model 777 (STS3215).")
+            leader_ids = (cfg.control_ids if args.command == "teleop" else
+                          (args.leader_id,) if args.command == "calibrate" else cfg.ids)
+            verify_leaders(bus, cfg, leader_ids)
+            print(f"{len(leader_ids)} leader servos online; model 777 (STS3215).")
             if args.command == "scan":
                 print_sample(bus, cfg)
             elif args.command == "monitor":
@@ -204,14 +221,16 @@ def main() -> None:
             elif args.command == "calibrate":
                 from .calibration import run as calibrate
                 calibrate(bus, cfg, args.leader_id, sign=args.sign,
-                          duration=args.duration, output=args.output)
+                          duration=args.duration, output=args.output, quiet=args.quiet,
+                          mapped_pair=args.mapped_pair)
             elif args.command == "multi":
                 from .multi_calibration import run as multi_calibrate
                 multi_calibrate(bus, cfg, args.ids, reverse=args.reverse,
                                 duration=args.duration, output=args.output,
                                 lock_others=args.lock_others)
             else:
-                teleop(bus, cfg, args.live, args.duration)
+                teleop(bus, cfg, args.live, args.duration, trial=args.trial,
+                       output=args.output)
     except KeyboardInterrupt:
         print("\nStopped by operator.")
     except (OSError, ValueError, RuntimeError) as exc:

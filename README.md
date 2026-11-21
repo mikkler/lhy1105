@@ -6,6 +6,87 @@
 
 ## 运行
 
+### 用另外两条 YAM 臂作六关节从臂
+
+本机的 `can_leader_l` 和 `can_leader_r` 各有 6 个 YAM 关节电机，末端是被动教学手柄，
+没有第 7 个电动夹爪。`config_can_leader.json` 单独指向这两路 CAN，且设置
+`follower_gripper: none`；默认 `config.json` 仍指向 `can_follower_l/r`。
+替代配置的 `mapping_confirmed` 保持 `false`，逐关节试运行可用 `--trial`。
+
+先在现场支撑两条臂、确认左右物理对应及急停可用，再逐关节小幅检查：
+
+```bash
+cd /home/noematrix/yanwen/lhy1105
+PYTHONPATH=/home/noematrix/ForceGello/i2rt \
+  /home/noematrix/miniconda3/envs/lhy/bin/python -m lhy1105 \
+  --config config_can_leader.json multi --ids 1 8
+```
+
+确认 12 个关节方向后，可用原来的两条飞特主臂控制这两条 YAM 臂的六个关节：
+
+```bash
+PYTHONPATH=/home/noematrix/ForceGello/i2rt \
+  /home/noematrix/miniconda3/envs/lhy/bin/python -m lhy1105 \
+  --config config_can_leader.json multi --ids 1 2 3 4 5 6 8 9 10 11 12 13
+```
+
+此路径不读取飞特夹爪 ID 7/14 的运动，也不连接原来的 `can_follower_l/r`。
+`multi` 会要求输入 `CONNECT` 和 `ARM`；正常退出时将连接的关节缓慢移到 0 rad，
+然后释放力矩。要以 `live` 路径试运行全部 12 个关节，执行：
+
+```bash
+PYTHONPATH=/home/noematrix/ForceGello/i2rt \
+  /home/noematrix/miniconda3/envs/lhy/bin/python -m lhy1105 \
+  --config config_can_leader.json teleop --live --trial
+```
+
+此命令的启动检查与控制循环都跳过 ID 7/14，且保留关节速度限制。它同样要求输入
+`CONNECT` 和 `ARM`。确认全部关节方向后，可将替代配置的 `mapping_confirmed`
+改为 `true`，并去掉 `--trial`。
+
+### 单关节实时角度和速度图
+
+选择一个主臂舵机（1–6 或 8–13），窗口上方实时绘制主臂映射后的目标角度和从臂实际
+反馈角度；下方绘制这两者的速度曲线（rad/s）。映射目标以 `ARM` 时的从臂姿态为基准，
+已按配置方向转换，但尚未经过关节限位和速度限制；从臂角度来自电机反馈。速度由角度
+数据按实际时间戳计算，使用约 0.1 秒的差分窗口平滑。绘图与控制分开运行。
+
+```bash
+cd /home/noematrix/yanwen/lhy1105
+PYTHONPATH=/home/noematrix/ForceGello/i2rt \
+  /home/noematrix/miniconda3/envs/lhy/bin/python scripts/plot_single_joint.py --id 2
+```
+
+省略 `--id 2` 可在终端输入要分析的 ID；也可加 `--window 30` 看最近 30 秒。
+按终端提示输入 `CONNECT`、`ARM` 后再移动主臂；按 `Ctrl+C`、`x`、`q` 或关闭绘图窗口停止。
+单关节程序退出时释放从臂力矩，不会自动回零，请支撑机械臂。每次运行的完整数据与
+一张上下两块的 PNG 图片分别保存为 `1120/idN/idN_频率Hz_限速radps.csv` 和
+`1120/idN/idN_频率Hz_限速radps.png`，例如 `1120/id2/id2_60Hz_0.8radps.png`。
+频率和速度取本次配置的目标循环频率与该关节的 `max_velocity`；相同 ID、频率、速度
+再次运行时会覆盖之前的 CSV 和图片。CSV 只保留采样时间、主臂映射目标角度、从臂反馈角度
+和配置频率；在开始采样前退出则不生成图片。
+实时窗口显示配置的循环目标频率、最近 3 秒的实际采样频率和采样间隔的第 95 百分位；
+PNG 则显示本次运行的整体实际频率。实际值由 CSV 中相邻采样时间戳计算，反映此程序
+完成主臂读取和从臂反馈的循环速度，不代表电机内部控制器的更新频率。
+
+### 整体 live 的 12 关节角度图
+
+左右从臂各 6 个关节同时运行时，用下面的脚本打开 12 格实时图。每格蓝线是主臂映射
+后的目标角度（限位和限速前），绿线是对应从臂的实际反馈角度；不绘制速度或夹爪。
+此脚本使用 `config_can_leader.json`，若映射尚未确认会沿用 `--trial` 模式。
+
+```bash
+cd /home/noematrix/yanwen/lhy1105
+PYTHONPATH=/home/noematrix/ForceGello/i2rt \
+  /home/noematrix/miniconda3/envs/lhy/bin/python scripts/plot_all_joints.py
+```
+
+在终端输入 `CONNECT`、`ARM` 后开始采集。按 `x`、`q`、`Ctrl+C` 或关闭图窗停止；
+控制程序按原有逻辑让两条从臂回零后保存完整图片。CSV 和一张 12 格 PNG 保存在
+`1120/all/all_频率Hz_限速radps.csv` 和同名 `.png`，例如当前配置会写入
+`1120/all/all_200Hz_2radps.png`。若六个关节限速不同，文件名逐项列出六个限速值；
+相同配置再次运行会覆盖对应文件。图上同时显示配置频率和实际采样频率。
+
 ### 逐关节 live 检查
 
 需要同时检查多个关节时，用 `multi --ids` 列出主臂 ID。可以选同一侧或左右两侧的关节；只连接选中的从臂侧，未选关节保持启动目标。方向默认取 `config.json`，可用 `--reverse` 临时反转指定 ID 的方向。终端实时显示每个所选关节的主臂 tick、相对角度、从臂反馈、命令和目标，CSV 记录保存在 `calibration_runs/`。
@@ -19,7 +100,7 @@ cd /home/noematrix/yanwen/lhy1105
 /home/noematrix/miniconda3/envs/lhy/bin/python -m lhy1105 multi --ids 1 2 8 9 --lock-others
 ```
 
-程序要求依次输入 `CONNECT`、`ARM`。按下 `ARM` 时把所有所选主从关节的当前位置对齐，随后移动主臂。`--lock-others` 会连接左右两条完整从臂，把所有未选关节持续保持在 `ARM` 时的位置。按 `x`、`q` 或 `Ctrl+C` 正常退出，或到达 `--duration` 时间后，所有已连接从臂缓慢回到配置的六个关节 `0 rad`、夹爪 `0.99`，确认反馈到位再释放力矩。通信或反馈故障时不会盲目执行自动复位。主臂位移不设软件上限；从臂目标限制在 YAM 模型的标称关节范围内，超出时显示 `LIMIT`。I2RT 初始化时提供的关节范围额外向两侧扩展了 0.15 rad，标定模式不会把这部分当成可用运动空间。
+程序要求依次输入 `CONNECT`、`ARM`。按下 `ARM` 时把所有所选主从关节的当前位置对齐，随后移动主臂。`--lock-others` 会连接左右两条完整从臂，把所有未选关节持续保持在 `ARM` 时的位置。按 `x`、`q` 或 `Ctrl+C` 正常退出，或到达 `--duration` 时间后，所有已连接从臂缓慢回到配置的六个关节 `0 rad`；有电动夹爪时还会移到 `0.99`，确认反馈到位再释放力矩。通信或反馈故障时不会盲目执行自动复位。主臂位移不设软件上限；从臂目标限制在 YAM 模型的标称关节范围内，超出时显示 `LIMIT`。I2RT 初始化时提供的关节范围额外向两侧扩展了 0.15 rad，标定模式不会把这部分当成可用运动空间。
 
 选择 `--lock-others` 时，两侧夹爪即使没有被选中，也可能在 `CONNECT` 阶段由 I2RT 自动移动来检测行程；`ARM` 之后才会保持所有未选关节。运行和自动回零时都要支撑双臂。
 
@@ -56,7 +137,7 @@ cd /home/noematrix/yanwen/lhy1105
 /home/noematrix/miniconda3/envs/lhy/bin/python -m lhy1105 teleop --live
 ```
 
-`teleop --live` 现在复用 `multi` 的全 14 ID 双臂控制路径，并将主从位置记录到 `calibration_runs/`。程序要求输入 `CONNECT`、`ARM`；I2RT 的 `linear_4310` 初始化可能执行夹爪标定。输入 `ARM` 时主手和 follower 当前位置对齐，运行中显示各关节主从位置。主手位移没有 0.5 rad 或 0.25 夹爪行程的启动姿态限制，单次读数变化和跟踪误差也不触发停机。超出 YAM 模型标称关节范围的目标停在边界并显示 `LIMIT`，夹爪目标限制在 0–1。`teleop --live` 直接发送限位后的目标，不再按 `max_velocity` 限速；`multi` 校准和退出回零仍保留限速。
+`teleop --live` 复用 `multi` 的双臂控制路径，并将主从位置记录到 `calibration_runs/`。默认配置使用全部 14 个 ID；无电动夹爪的替代配置只使用 12 个关节 ID。程序要求输入 `CONNECT`、`ARM`；I2RT 的 `linear_4310` 初始化可能执行夹爪标定。输入 `ARM` 时主手和 follower 当前位置对齐，运行中显示各关节主从位置。主手位移没有 0.5 rad 或 0.25 夹爪行程的启动姿态限制，单次读数变化和跟踪误差也不触发停机。超出 YAM 模型标称关节范围的目标停在边界并显示 `LIMIT`，夹爪目标限制在 0–1。默认配置的 `teleop --live` 直接发送限位后的目标；无夹爪配置、`multi` 校准和退出回零仍按 `max_velocity` 限速。
 
 运行时按 `x`、`q` 或一次 `Ctrl+C` 会将两条 follower 缓慢移向 rest（六个关节零位，夹爪 0.99），检查反馈到位后再关闭控制器。**rest 指令不保证机械臂已经接触台面；全过程都要保持支撑，关闭后力矩会释放。**通讯或反馈故障时不会尝试盲目回 rest，而是直接停机并报告错误。
 

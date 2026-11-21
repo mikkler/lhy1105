@@ -36,8 +36,10 @@ def connect_side(cfg: Config, side: str, ids: tuple[int, ...], stack: ExitStack,
     from i2rt.robots.utils import ArmType, GripperType
 
     joints = [selection(ident)[1] for ident in ids]
+    if 6 in joints and not cfg.follower_has_gripper[side]:
+        raise ValueError(f"{side}: selected leader gripper has no follower gripper")
     has_arm = lock_all or any(joint < 6 for joint in joints)
-    has_gripper = lock_all or 6 in joints
+    has_gripper = cfg.follower_has_gripper[side] and (lock_all or 6 in joints)
     if has_arm and has_gripper:
         options = {"gripper_type": GripperType.LINEAR_4310}
         dofs = 7
@@ -124,6 +126,10 @@ def run(bus: FeetechBus, cfg: Config, ids: list[int], *, reverse: list[int] | No
 
     reverse = reverse or []
     chosen = validate_ids(ids, reverse)
+    for ident in chosen:
+        side, joint = selection(ident)
+        if joint == 6 and not cfg.follower_has_gripper[side]:
+            raise ValueError(f"{side}: selected leader gripper has no follower gripper")
     if duration is not None and duration <= 0:
         raise ValueError("duration must be positive")
     if not sys.stdin.isatty():
@@ -141,7 +147,8 @@ def run(bus: FeetechBus, cfg: Config, ids: list[int], *, reverse: list[int] | No
     print("Support all connected followers; torque releases after returning to zero.")
     if lock_others:
         print("LOCK OTHERS: both full follower arms will hold unselected joints at their ARM pose.")
-        print("I2RT may move either gripper during automatic limit calibration before ARM.")
+        if any(cfg.follower_has_gripper.values()):
+            print("I2RT may move a gripper during automatic limit calibration before ARM.")
     elif 7 in chosen or 14 in chosen:
         print("A selected gripper may move during I2RT automatic limit calibration.")
     if input("Type CONNECT to connect the selected follower side(s): ").strip() != "CONNECT":
@@ -179,6 +186,7 @@ def run(bus: FeetechBus, cfg: Config, ids: list[int], *, reverse: list[int] | No
                 f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_multi.csv")
         path.parent.mkdir(parents=True, exist_ok=True)
         last = started = time.monotonic()
+        last_flush = started
         last_display = 0.
         last_cycle_start = None
         count = 0
@@ -246,7 +254,7 @@ def run(bus: FeetechBus, cfg: Config, ids: list[int], *, reverse: list[int] | No
                     for ident, side, joint, axis, tick, delta_rad, raw, bounded, hit in rows:
                         actual = float(measured[side][axis])
                         command = float(commands[side][axis])
-                        writer.writerow([f"{now-started:.3f}", ident, side, joint + 1, tick,
+                        writer.writerow([f"{now-started:.6f}", ident, side, joint + 1, tick,
                                          cumulative[ident], f"{delta_rad:.5f}", f"{raw:.5f}",
                                          f"{bounded:.5f}", f"{command:.5f}", f"{actual:.5f}",
                                          int(hit), f"{drifts[side]:.5f}"])
@@ -255,13 +263,16 @@ def run(bus: FeetechBus, cfg: Config, ids: list[int], *, reverse: list[int] | No
                                        f"(Δ{delta_rad:+.3f} rad) | follower {actual:+.3f} {unit} "
                                        f"cmd {command:+.3f} target {bounded:+.3f}"
                                        f"{' LIMIT' if hit else ''}")
+                    if now - last_flush >= .1:
+                        file.flush()
+                        last_flush = now
                     record_ns = time.monotonic_ns()
                     count += 1
                     if show_cycle_timing or now - last_display >= .2:
                         if show_cycle_timing:
                             period_text = f"{period_ms:.2f} ms" if period_ms is not None else "首轮"
                             display.append(
-                                f"第 {count} 轮耗时: 14舵机读取 {(sample_ns - cycle_ns) / 1e6:.2f} ms | "
+                                f"第 {count} 轮耗时: {len(chosen)}舵机读取 {(sample_ns - cycle_ns) / 1e6:.2f} ms | "
                                 f"从臂反馈 {(feedback_ns - sample_ns) / 1e6:.2f} ms | "
                                 f"计算 {(compute_ns - feedback_ns) / 1e6:.2f} ms | "
                                 f"命令下发 {(command_ns - compute_ns) / 1e6:.2f} ms | "

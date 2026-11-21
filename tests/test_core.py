@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import patch
 from pathlib import Path
+import json
+import tempfile
 import time
 from types import SimpleNamespace
 
@@ -8,13 +10,25 @@ import numpy as np
 
 from lhy1105.feetech import FeetechBus, ServoError
 from lhy1105.calibration import nominal_arm_limits, selected_target, selection
-from lhy1105.multi_calibration import follower_axis, move_to_zero, validate_ids, zero_target
-from lhy1105.cli import enable_feedback_timestamps, move_to_rest, teleop
+from lhy1105.multi_calibration import follower_axis, move_to_zero, run as multi_run, validate_ids, zero_target
+from lhy1105.cli import enable_feedback_timestamps, move_to_rest, teleop, verify_leaders
 from lhy1105.config import load_config
 from lhy1105.mapping import ArmMapping, SafetyStop, check_limits, rate_limit, tick_delta
 
 
 class CoreTests(unittest.TestCase):
+    def test_hz_200_boundary(self):
+        data = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            data["safety"]["hz"] = 200
+            path.write_text(json.dumps(data))
+            self.assertEqual(load_config(path).hz, 200)
+            data["safety"]["hz"] = 200.01
+            path.write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError, "hz must"):
+                load_config(path)
+
     def test_single_joint_selection_and_target(self):
         self.assertEqual(selection(1), ("left", 0))
         self.assertEqual(selection(7), ("left", 6))
@@ -82,6 +96,31 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(args[2], list(range(1, 15)))
         self.assertEqual(kwargs, {"duration": 10., "lock_others": True,
                                   "show_cycle_timing": True, "limit_velocity": False})
+
+    def test_six_joint_follower_configuration_avoids_missing_grippers(self):
+        cfg = load_config(Path(__file__).resolve().parents[1] / "config_can_leader.json")
+        self.assertEqual(cfg.channels, {"left": "can_leader_l", "right": "can_leader_r"})
+        self.assertEqual(cfg.follower_has_gripper, {"left": False, "right": False})
+        self.assertFalse(cfg.mapping_confirmed)
+        with self.assertRaisesRegex(SafetyStop, "mapping_confirmed"):
+            teleop(object(), cfg, True, None)
+        with self.assertRaisesRegex(ValueError, "no follower gripper"):
+            multi_run(object(), cfg, [7])
+        bus = SimpleNamespace(ping=unittest.mock.Mock(), model=unittest.mock.Mock(return_value=777))
+        verify_leaders(bus, cfg, cfg.control_ids)
+        checked = [call.args[0] for call in bus.ping.call_args_list]
+        self.assertEqual(checked, [1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13])
+        with patch("sys.stdin.isatty", return_value=True), patch("lhy1105.multi_calibration.run") as run:
+            teleop(object(), cfg, True, 10., trial=True)
+        args, kwargs = run.call_args
+        self.assertEqual(args[2], [1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13])
+        self.assertEqual(kwargs, {"duration": 10., "lock_others": True,
+                                  "show_cycle_timing": True, "limit_velocity": True})
+        with patch("sys.stdin.isatty", return_value=True), patch("lhy1105.multi_calibration.run") as run:
+            teleop(object(), cfg, True, 10., trial=True, output="/tmp/all.csv")
+        self.assertEqual(run.call_args.kwargs["output"], "/tmp/all.csv")
+        with self.assertRaisesRegex(SafetyStop, "--trial"):
+            teleop(object(), cfg, False, None, trial=True)
 
     def test_ping_packet_and_reply(self):
         self.assertEqual(FeetechBus.packet(1, 1), bytes.fromhex("ff ff 01 02 01 fb"))
