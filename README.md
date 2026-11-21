@@ -3,6 +3,7 @@
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Linux%20机器人-lightgrey)
 ![Status](https://img.shields.io/badge/status-实验性-orange)
+![License](https://img.shields.io/badge/License-GPLv3-blue)
 
 **lhy1105** 是一套带安全保护的**双臂遥操作**程序：读取主手（FE-URT-2）上 14 个飞特
 **STS3215** 舵机的位置，实时映射并驱动两条 **YAM** 从臂的 6 个关节（+ 可选夹爪）。
@@ -195,3 +196,11 @@ lhy1105/
 - 关节增量映射与 follower API 参考本机 `~/uarm/i2rt/scripts/uarm2i2rt_right_follower.py`
 - [LeRobot-Anything-U-Arm](https://github.com/MINT-SJTU/LeRobot-Anything-U-Arm) 的主从臂读取与夹爪控制思路
 - 飞特 URT-2 读取使用 [FT-SCS 协议](https://ftservo.github.io/ftservo-wiki/reference/protocol/ft-scs/) 的 PING / READ 指令
+
+## 11. 许可证
+
+本项目采用 [GNU General Public License v3.0](LICENSE)（GPL-3.0）。
+
+Copyright © 2026 mikkler
+
+简单说：你可以自由使用、修改和分发本代码；但如果你修改后**分发**，也必须以 GPL-3.0 开源你的修改。完整条款见 [LICENSE](LICENSE)。
